@@ -15,8 +15,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 from dotenv import load_dotenv
 from pathlib import Path
-from ticketdb import Ticket, Session
-
+from database import async_session as Session
+from models import Ticket
+from sqlalchemy import select
 
 def initialize_signing_key():
     print("Initialization Protocol: Generating Private ED25519 Key... \n")
@@ -75,7 +76,7 @@ class TicketGenerator:
         )
         self.issuer = issuer
 
-    def generate_ticket(
+    async def generate_ticket(
         self,
         uid: str,
         ticket_type: str = "single_use",
@@ -87,11 +88,11 @@ class TicketGenerator:
             "user_id": uid,
             "ticket_type": ticket_type,
             "valid_for": str(valid_for),
-            "issued_at": now.strftime("%Y%m%d_%H%M%z"),
+            "issued_at": now.isoformat(),
             "issuer": self.issuer
         }
         signature = self.sign_ticket(ticket)
-        self.save_ticket(ticket, signature)
+        await self.save_ticket(ticket, signature)
         QRP = self.create_QR_payload(ticket, signature)
         return QRP
 
@@ -136,13 +137,12 @@ class TicketGenerator:
         ).decode()
         return QR_Payload
 
-    def save_ticket(
+    async def save_ticket(
         self,
         ticket: dict,
         signature: str
     ):
         """Calls the Database API to save a ticket to a uid"""
-        session = Session()
         db_ticket = Ticket(
             ticket_id=ticket["ticket_id"],
             user_id=ticket["user_id"],
@@ -152,9 +152,11 @@ class TicketGenerator:
             issuer=ticket["issuer"],
             signature=signature
         )
-        session.add(db_ticket)
-        session.commit()
-        session.close()
+        print("Saving Ticket... ")
+        async with Session() as session:
+            session.add(db_ticket)
+            await session.commit()
+            print(f"Ticket Generated!")
 
 
 class TicketValidator:
@@ -222,15 +224,17 @@ class TicketValidator:
 
         return False  # Unknown or malformed ticket
 
-    def get_ticket_by_id(
+    async def get_ticket_by_id(
         self,
         ticket_id: str
     ) -> Ticket | None:
-        session = Session()
-        ticket = session.query(Ticket).filter_by(ticket_id=ticket_id).first()
-        return ticket
+        async with Session() as session:
+            stmt = select(Ticket).filter_by(ticket_id=ticket_id)
+            result = await session.execute(stmt)
+            ticket = result.scalars().first()
+            return ticket
 
-    def validate(
+    async def validate(
         self,
         payload_b64: str
     ) -> dict:
@@ -238,7 +242,7 @@ class TicketValidator:
             payload = self.decode_payload(payload_b64)
             ticket = payload["ticket"]
             signature = payload["signature"]
-            db_record = self.get_ticket_by_id(ticket["ticket_id"])
+            db_record = await self.get_ticket_by_id(ticket["ticket_id"])
 
             # This code is for embedded public keys;
             # Low-Security Option
@@ -281,7 +285,7 @@ class TicketValidator:
                     "reason": "Ticket does not exist in database."
                 }
 
-            if db_record.status != "active":
+            if db_record.status == False:
                 return {
                     "valid": False,
                     "reason": f"Ticket status: {db_record.status}"
@@ -308,6 +312,7 @@ class TicketValidator:
 
 
 if __name__ == "__main__":
+    # THIS IS DEVELOPMENT/TESTING ONLY
     parser = argparse.ArgumentParser(description="RTS Ticketing System")
     parser.add_argument(
         "--init",

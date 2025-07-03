@@ -8,12 +8,11 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(64), unique=True, nullable=False)
     email = Column(String(120), unique=True, nullable=True)
-    # Securely store the user's password hash for authentication
-    hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    hashed_password = Column(String, nullable=False)
 
-    # One-to-many relationship: a user can have multiple tickets
     tickets = relationship("Ticket", back_populates="user")
+
 
 class Product(Base):
     __tablename__ = "products"
@@ -25,12 +24,11 @@ class Product(Base):
     stripe_product_id = Column(String(128), nullable=False, unique=True)
     active = Column(Boolean, default=True)
 
-    # No tickets relationship since Ticket does not reference product_id
 
 class Ticket(Base):
     __tablename__ = "tickets"
 
-    ticket_id = Column(String, primary_key=True, unique=True, nullable=False)
+    ticket_id = Column(String, unique=True, nullable=False, primary_key=True)
     ticket_type = Column(String)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     issued_at = Column(String)
@@ -39,7 +37,4 @@ class Ticket(Base):
     signature = Column(String)
     status = Column(Boolean, default=True)
 
-    # Link back to the owning user
     user = relationship("User", back_populates="tickets")
-    # Removed product relationship since no product_id column
-
