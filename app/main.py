@@ -1,73 +1,72 @@
-# Main
-# Copyright 2025
-# MIT License
+# Main Server Code
 
-import sys
-from PySide6.QtWidgets import QApplication, QMainWindow
-from PySide6.QtPdf import QPdfDocument
-from PySide6.QtPdfWidgets import QPdfView
-from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtCore import QObject, Slot, Signal
-from ticketing import TicketGenerator, TicketValidator
+import os
+import stripe
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
+load_dotenv()
+stripe.api_key = os.getenv("STRIPE_API_KEY")
 
-class PdfViewer(QMainWindow):
-    def __init__(self, pdf_path):
-        super().__init__()
-        self.setWindowTitle("PDF Viewer")
+app = FastAPI()
 
-        self.pdf_document = QPdfDocument(self)
-        self.pdf_document.load(pdf_path)
+# CORS (for localhost development)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-        self.pdf_view = QPdfView(self)
-        self.pdf_view.setDocument(self.pdf_document)
+# --- Create Checkout Session ---
+@app.post("/api/create-checkout-session")
+async def create_checkout(data: dict):
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price': data['price_id'],  # lookup by ticket type
+                'quantity': 1,
+            }],
+            mode='payment',
+            success_url=f"{os.getenv('DOMAIN_URL')}/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{os.getenv('DOMAIN_URL')}/cancel",
+            metadata={
+                'user_id': data['user_id'],
+                'ticket_type_id': data['ticket_type_id']
+            }
+        )
+        return {"url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-        self.setCentralWidget(self.pdf_view)
-        self.resize(800, 600)
+# --- Stripe Webhook ---
+@app.post("/api/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature")
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
 
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, webhook_secret)
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid signature")
 
-class Controller(QObject):
-    def __init__(self, loader):
-        super().__init__()
-        self.loader = loader
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        user_id = session["metadata"]["user_id"]
+        ticket_type = session["metadata"]["ticket_type_id"]
 
-    @Slot(str)
-    def loadPage(self, page):
-        self.loader.setProperty("source", page)
+        # Generate ticket (insert QR, expiry, etc.)
+        generate_and_store_ticket(user_id, ticket_type)
 
+    return {"status": "ok"}
 
-class AppBackend(QObject):
-    def __init__(self):
-        super().__init__()
-        self._windows = []
+def generate_and_store_ticket(user_id, ticket_type_id):
+    ticket_id = f"RR-{user_id}-{ticket_type_id}-{os.urandom(4).hex()}"
+    # Save to SQLite (client wallet) and Postgres/SQLite (server verification DB)
+    print(f"Generated ticket {ticket_id} for user {user_id}, type {ticket_type_id}")
+    # TODO: Save in database
 
-    @Slot(str)
-    def open_pdf_viewer(self, fname: str):
-        viewer = PdfViewer(f"assets/routes/{fname}-map2025.pdf")
-        viewer.show()
-        self._windows.append(viewer)  # Prevent garbage collection
-
-    @Slot(str)
-    def purchase_ticket(self, ticket_type: str):
-        pass
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(True)
-    engine = QQmlApplicationEngine()
-    engine.load("main.qml")
-
-    if not engine.rootObjects():
-        sys.exit(-1)
-
-    root = engine.rootObjects()[0]
-    loader = root.findChild(QObject, "pageLoader")
-
-    controller = Controller(loader)
-    backend = AppBackend()
-
-    engine.rootContext().setContextProperty("controller", controller)
-    engine.rootContext().setContextProperty("backend", backend)
-
-    sys.exit(app.exec())
