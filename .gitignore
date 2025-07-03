@@ -13,6 +13,7 @@ __pycache__/
 # ED5519 Key
 *.key
 
+env/
 # Distribution / packaging
 .Python
 build/
