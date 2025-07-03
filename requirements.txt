@@ -1,0 +1,6 @@
+stripe>=12.0.0
+pyside6
+segno
+qrcode-artistic
+dotenv
+sqlalchemy
