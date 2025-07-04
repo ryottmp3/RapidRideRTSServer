@@ -17,8 +17,10 @@ Dependencies:
 - python-bcrypt for secure password hashing.
 - Python-JOSE for JWT encoding & decoding.
 - Pydantic for request/response validation.
+- Python logging for debug tracing.
 """
 import os
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -37,12 +39,15 @@ from models import User
 # Load environment variables from .env file
 load_dotenv()
 
-# JWT configuration - keep your secret key safe!
+# Configure logger for this module
+logger = logging.getLogger("rts.auth")
+# If running under uvicorn with --log-level debug or trace, these debug calls will be shown.
+
+# JWT configuration
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "CHANGE_THIS_SECRET")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
-# OAuth2 scheme for token retrieval
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
 router = APIRouter(
@@ -54,87 +59,81 @@ router = APIRouter(
 # === Pydantic Schemas ===
 
 class UserCreate(BaseModel):
-    """
-    Data required to register a new user.
-    """
     username: str
     email: Optional[str] = None
     password: str
 
 class Token(BaseModel):
-    """Response model for access token."""
     access_token: str
     token_type: str
 
 class TokenData(BaseModel):
-    """Data stored in JWT token payload."""
     username: Optional[str] = None
 
 class UserInDB(BaseModel):
-    """User metadata returned by protected endpoints."""
     id: int
     username: str
     email: Optional[str] = None
 
-# === Utility Functions ===
+# === Utility Functions with Debug Tracing ===
 
 def hash_password(password: str) -> str:
-    """
-    Hash a plaintext password using bcrypt and return a UTF-8 string for storage.
-    """
+    """Hash a plaintext password using bcrypt and return a UTF-8 string for storage."""
+    logger.debug("Hashing password: <hidden> bytes length=%d", len(password))
     pwd_bytes = password.encode("utf-8")
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(pwd_bytes, salt)
-    return hashed.decode("utf-8")
+    hashed_str = hashed.decode("utf-8")
+    logger.debug("Generated bcrypt hash: %s...", hashed_str[:29])
+    return hashed_str
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Returns True if `plain_password` matches the stored bcrypt hash.
-    """
+    """Returns True if `plain_password` matches the stored bcrypt hash."""
+    logger.debug("Verifying password against hash: %s...", hashed_password[:29])
     pwd_bytes = plain_password.encode("utf-8")
     hashed_bytes = hashed_password.encode("utf-8")
-    return bcrypt.checkpw(pwd_bytes, hashed_bytes)
-
+    result = bcrypt.checkpw(pwd_bytes, hashed_bytes)
+    logger.debug("Password verification result: %s", result)
+    return result
 
 async def get_user_by_username(db: AsyncSession, username: str) -> Optional[User]:
-    """Fetch a user record by username."""
+    logger.debug("Fetching user by username: %s", username)
     result = await db.execute(select(User).filter_by(username=username))
-    return result.scalars().first()
-
+    user = result.scalars().first()
+    logger.debug("User fetched: %s", "found" if user else "not found")
+    return user
 
 async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[User]:
-    """
-    Verify username and password combination.
-    Returns user if successful, None otherwise.
-    """
+    logger.debug("Authenticating user: %s", username)
     user = await get_user_by_username(db, username)
-    if not user or not verify_password(password, user.hashed_password):
+    if not user:
+        logger.debug("Authentication failed: user not found")
         return None
+    if not verify_password(password, user.hashed_password):
+        logger.debug("Authentication failed: invalid password")
+        return None
+    logger.debug("Authentication succeeded for user: %s", username)
     return user
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """
-    Generate a JWT token containing `sub` and expiration claims.
-    """
+    logger.debug("Creating access token for data: %s", data)
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    logger.debug("Generated JWT token: %s...", token[:20])
+    return token
 
-# === API Endpoints ===
+# === API Endpoints with Debug Tracing ===
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 async def register(user: UserCreate, db: AsyncSession = Depends(get_db)):
-    """
-    Register a new user.
-    - Hashes the password.
-    - Saves user to the database.
-    - Returns an access token for immediate authentication.
-    """
+    logger.debug("Register endpoint called for username: %s", user.username)
     existing = await get_user_by_username(db, user.username)
     if existing:
+        logger.debug("Registration failed: username already exists: %s", user.username)
         raise HTTPException(status_code=400, detail="Username already registered")
 
     hashed_pwd = hash_password(user.password)
@@ -143,45 +142,39 @@ async def register(user: UserCreate, db: AsyncSession = Depends(get_db)):
         email=user.email,
         hashed_password=hashed_pwd
     )
+    logger.debug("Creating new user record: %s", user.username)
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
 
     access_token = create_access_token({"sub": new_user.username})
+    logger.debug("Registration successful, issuing token for user: %s", new_user.username)
     return {"access_token": access_token, "token_type": "bearer"}
-
 
 @router.post("/token", response_model=Token)
 async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    OAuth2 password flow endpoint.
-    - Validates user credentials.
-    - Returns a JWT access token if successful.
-    """
+    logger.debug("Token endpoint called for username: %s", form_data.username)
     user = await authenticate_user(db, form_data.username, form_data.password)
     if not user:
+        logger.debug("Login failed for username: %s", form_data.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     access_token = create_access_token({"sub": user.username})
+    logger.debug("Login successful, issuing token for user: %s", user.username)
     return {"access_token": access_token, "token_type": "bearer"}
-
 
 @router.get("/users/me", response_model=UserInDB)
 async def read_users_me(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Get current authenticated user's metadata.
-    - Decodes JWT token.
-    - Retrieves user from database.
-    """
+    logger.debug("Users/me endpoint called with token: %s...", token[:20])
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -191,14 +184,19 @@ async def read_users_me(
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
+            logger.debug("JWT decode succeeded but no sub claim found")
             raise credentials_exception
+        logger.debug("JWT decoded, subject: %s", username)
         token_data = TokenData(username=username)
-    except JWTError:
+    except JWTError as e:
+        logger.debug("JWT decode error: %s", e)
         raise credentials_exception
 
     user = await get_user_by_username(db, token_data.username)
     if user is None:
+        logger.debug("User not found for subject in token: %s", token_data.username)
         raise credentials_exception
 
+    logger.debug("Users/me returning data for user: %s", user.username)
     return UserInDB(id=user.id, username=user.username, email=user.email)
 
