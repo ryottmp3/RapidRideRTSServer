@@ -14,7 +14,7 @@ This module provides:
 Dependencies:
 - FastAPI for web framework.
 - SQLAlchemy async session for database operations.
-- python-bcrypt for secure password hashing.
+- Passlib for secure password hashing.
 - Python-JOSE for JWT encoding & decoding.
 - Pydantic for request/response validation.
 """
@@ -25,7 +25,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
-import bcrypt
+from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +42,8 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY", "CHANGE_THIS_SECRET")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
+# Password hashing configuration using bcrypt algorithm
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # OAuth2 scheme for token retrieval
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
@@ -78,23 +80,14 @@ class UserInDB(BaseModel):
 
 # === Utility Functions ===
 
-def hash_password(password: str) -> str:
-    """
-    Hash a plaintext password using bcrypt and return a UTF-8 string for storage.
-    """
-    pwd_bytes = password.encode("utf-8")
-    salt = bcrypt.gensalt()
-    hashed = bcrypt.hashpw(pwd_bytes, salt)
-    return hashed.decode("utf-8")
-
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Returns True if `plain_password` matches the stored bcrypt hash.
-    """
-    pwd_bytes = plain_password.encode("utf-8")
-    hashed_bytes = hashed_password.encode("utf-8")
-    return bcrypt.checkpw(pwd_bytes, hashed_bytes)
+    """Check if provided password matches stored hash."""
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password: str) -> str:
+    """Hash a plaintext password for secure storage."""
+    return pwd_context.hash(password)
 
 
 async def get_user_by_username(db: AsyncSession, username: str) -> Optional[User]:
@@ -106,7 +99,7 @@ async def get_user_by_username(db: AsyncSession, username: str) -> Optional[User
 async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[User]:
     """
     Verify username and password combination.
-    Returns user if successful, None otherwise.
+    Returns user if successful, False otherwise.
     """
     user = await get_user_by_username(db, username)
     if not user or not verify_password(password, user.hashed_password):
@@ -133,11 +126,13 @@ async def register(user: UserCreate, db: AsyncSession = Depends(get_db)):
     - Saves user to the database.
     - Returns an access token for immediate authentication.
     """
+    # Check for existing username
     existing = await get_user_by_username(db, user.username)
     if existing:
         raise HTTPException(status_code=400, detail="Username already registered")
 
-    hashed_pwd = hash_password(user.password)
+    # Hash the password and create user record
+    hashed_pwd = get_password_hash(user.password)
     new_user = User(
         username=user.username,
         email=user.email,
@@ -147,6 +142,7 @@ async def register(user: UserCreate, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(new_user)
 
+    # Issue JWT token
     access_token = create_access_token({"sub": new_user.username})
     return {"access_token": access_token, "token_type": "bearer"}
 
