@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("rts.server.main")
 
 # Load key material from .env
-load_dotenv()
+load_dotenv("../.env")
 priv_key_b64 = os.getenv("ED25519_PRIVATE_KEY_B64")
 pub_key_b64 = os.getenv("ED25519_PUBLIC_KEY_B64")
 
@@ -172,8 +172,8 @@ async def create_checkout_session(
                 "quantity": 1,
             }],
             mode="payment",
-            success_url=os.getenv("FRONTEND_URL") + "/payment-success?session_id={CHECKOUT_SESSION_ID}",
-            cancel_url=os.getenv("FRONTEND_URL") + "/payment-cancel",
+            success_url=f"{FRONTEND_URL}/payment-success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{FRONTEND_URL}/payment-cancel",
             metadata={
                 "user_id": str(current_user.id),
                 "ticket_type": data.ticket_type,
@@ -186,7 +186,7 @@ async def create_checkout_session(
         logger.error("Failed to create Checkout Session: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-# ==== Webhook to fulfill order ====
+# ==== Webhook to fulfill order ==== ====
 @app.post("/stripe-webhook", include_in_schema=False)
 async def stripe_webhook(request: Request):
     payload = await request.body()

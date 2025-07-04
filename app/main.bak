@@ -20,7 +20,9 @@ Run:
 
 import os
 import base64
+import logging
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.responses import Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from auth import router as auth_router
@@ -33,12 +35,17 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey
 )
 
+# Initialize logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger("rts.server.main")
+
 # Load key material from .env
 load_dotenv()
 priv_key_b64 = os.getenv("ED25519_PRIVATE_KEY_B64")
 pub_key_b64 = os.getenv("ED25519_PUBLIC_KEY_B64")
 
 if not priv_key_b64 or not pub_key_b64:
+    logger.error("ED25519 Keypair not found in .env")
     raise RuntimeError("ED25519 keypair not found in .env")
 
 # Decode from base64
@@ -74,8 +81,166 @@ class TicketValidationRequest(BaseModel):
     """Data sent by validator (scanner app) to verify a ticket"""
     payload_b64: str
 
+# ==== Public Key endpoint for client-side validation ====
+@app.get("/public_key", summary="Get ED25519 Pubkey")
+async def public_key_endpoint():
+    """Returns new raw ED25519 public key bytes in DER format"""
+    logger.debug(f"Serving ED25519 Pubkey, {len(pub_key_bytes)} bytes")
+    return Response(content=pub_key_bytes, media_type="application/octet-stream")
+
+# ==== NEW: Stripe sandbox integration ====
+import stripe
+from fastapi import Request
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+
+class PaymentRequest(BaseModel):
+    """Data for creating a Stripe PaymentIntent"""
+    amount: int
+    currency: str = "usd"
+
+@app.post("/create-payment-intent", summary="Create Stripe PaymentIntent")
+async def create_payment_intent(
+    data: PaymentRequest,
+    current_user = Depends(read_users_me)
+):
+    try:
+        intent = stripe.PaymentIntent.create(
+            amount=data.amount,
+            currency=data.currency,
+            metadata={"user_id": str(current_user.id)}
+        )
+        logger.debug("Created PaymentIntent %s for user %s", intent.id, current_user.username)
+        return {"client_secret": intent.client_secret}
+    except Exception as e:
+        logger.error("Failed to create PaymentIntent: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/stripe-webhook", include_in_schema=False)
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig_header = request.headers.get("Stripe-Signature")
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, WEBHOOK_SECRET)
+        logger.debug("Received Stripe event: %s", event["type"])
+    except stripe.error.SignatureVerificationError as e:
+        logger.error("Webhook signature verification failed: %s", e)
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    # Handle payment events
+    if event["type"] == "payment_intent.succeeded":
+        intent = event["data"]["object"]
+        logger.info("PaymentIntent succeeded: %s", intent["id"])
+        # TODO: fulfill order or record success
+    else:
+        logger.info("Unhandled Stripe event type: %s", event["type"])
+
+    return {"status": "success"}
 
 # ==== ROUTES ====
+
+# ==== Stripe Checkout Session creation ====
+import stripe
+from fastapi import Request
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+
+class CheckoutRequest(BaseModel):
+    ticket_type: str = "single_use"
+    valid_for: str | None = None
+
+@app.post("/create-checkout-session", summary="Create Stripe Checkout Session")
+async def create_checkout_session(
+    data: CheckoutRequest,
+    current_user = Depends(read_users_me)
+):
+    """
+    Creates a Stripe Checkout Session for the given ticket type.
+    Returns a URL for the client to redirect to.
+    """
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {"name": f"Ticket: {data.ticket_type}"},
+                    "unit_amount": 500,  # placeholder amount in cents
+                },
+                "quantity": 1,
+            }],
+            mode="payment",
+            success_url=os.getenv("FRONTEND_URL") + "/payment-success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=os.getenv("FRONTEND_URL") + "/payment-cancel",
+            metadata={
+                "user_id": str(current_user.id),
+                "ticket_type": data.ticket_type,
+                **({"valid_for": data.valid_for} if data.valid_for else {})
+            }
+        )
+        logger.debug("Created Stripe Checkout Session %s for user %s", session.id, current_user.username)
+        return {"url": session.url}
+    except Exception as e:
+        logger.error("Failed to create Checkout Session: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==== Webhook to fulfill order ====
+@app.post("/stripe-webhook", include_in_schema=False)
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig_header = request.headers.get("Stripe-Signature")
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, WEBHOOK_SECRET)
+        logger.debug("Received Stripe event: %s", event.type)
+    except Exception as e:
+        logger.error("Webhook signature verification failed: %s", e)
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    if event.type == "checkout.session.completed":
+        session = event.data.object
+        user_id = session.metadata.get("user_id")
+        ticket_type = session.metadata.get("ticket_type")
+        valid_for = session.metadata.get("valid_for")
+        try:
+            # generate and persist ticket
+            payload = await ticket_generator.generate_ticket(
+                uid=int(user_id),
+                ticket_type=ticket_type,
+                valid_for=valid_for
+            )
+            logger.info("Generated ticket for user %s after payment", user_id)
+        except Exception as e:
+            logger.error("Error generating ticket after payment: %s", e)
+    else:
+        logger.info("Unhandled Stripe event type: %s", event.type)
+
+    return {"status": "success"}
+
+# ==== Wallet retrieval endpoint ====
+class TicketModel(BaseModel):
+    ticket_id: str
+    payload: str
+    ticket_type: str
+
+@app.get("/wallet", summary="List user tickets", response_model=list[TicketModel])
+async def get_wallet(current_user = Depends(read_users_me)):
+    """
+    Returns all tickets generated for the current user.
+    """
+    try:
+        records = await ticket_validator.list_tickets_for_user(current_user.id)
+        result = [
+            TicketModel(ticket_id=str(r.id), payload=r.payload, ticket_type=r.ticket_type)
+            for r in records
+        ]
+        logger.debug("Retrieved %d tickets for user %s", len(result), current_user.username)
+        return result
+    except Exception as e:
+        logger.error("Error retrieving wallet: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/generate", summary="Generate signed ticket", response_model=dict)
 async def generate_ticket(
@@ -105,8 +270,10 @@ async def generate_ticket(
             ticket_type=data.ticket_type,
             valid_for=data.valid_for
         )
+        logger.debug(f"Generated ticket payload for user {current_user.username}")
         return {"payload": payload}
     except Exception as e:
+        logger.error(f"Ticket Generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"Ticket generation failed: {e}")
 
 
@@ -133,7 +300,9 @@ async def validate_ticket(data: TicketValidationRequest):
     """
     try:
         result = await ticket_validator.validate(data.payload_b64)
+        logger.debug(f"Ticket Validation Result: {result}")
         return result
     except Exception as e:
+        logger.error(f"Validation Error: {e}")
         raise HTTPException(status_code=400, detail=f"Validation error: {e}")
 
