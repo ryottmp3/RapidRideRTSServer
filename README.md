@@ -21,6 +21,14 @@ This app enables users to:
  - python-dotenv
  - sqlite
  - python-sqlalchemy
+ - postgresql
+   - sudo su -l postgres -c "initdb --locale=C.UTF-8 --encoding=UTF8 -D '/var/lib/postgres/data'"
+   - sudo systemctl enable --now postgresql
+   - sudo -u postgres psql
+     - CREATE ROLE rts WITH LOGIN PASSWORD 'rapidride';
+     - CREATE DATABASE rapidride_db OWNER rts;
+     - ALTER ROLE rts CREATEDB;
+     - \q
 
 ---
 
