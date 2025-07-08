@@ -21,7 +21,8 @@ Run:
 import os
 import base64
 import logging
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
+import stripe
 from fastapi.responses import Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -43,7 +44,9 @@ logger = logging.getLogger("rts.server.main")
 load_dotenv("../.env")
 priv_key_b64 = os.getenv("ED25519_PRIVATE_KEY_B64")
 pub_key_b64 = os.getenv("ED25519_PUBLIC_KEY_B64")
-
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+stripe.api_key = os.getenv("STRIPE_PRIVATE_API_KEY")
+WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 if not priv_key_b64 or not pub_key_b64:
     logger.error("ED25519 Keypair not found in .env")
     raise RuntimeError("ED25519 keypair not found in .env")
@@ -89,11 +92,6 @@ async def public_key_endpoint():
     return Response(content=pub_key_bytes, media_type="application/octet-stream")
 
 # ==== NEW: Stripe sandbox integration ====
-import stripe
-from fastapi import Request
-
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 class PaymentRequest(BaseModel):
     """Data for creating a Stripe PaymentIntent"""
@@ -141,11 +139,6 @@ async def stripe_webhook(request: Request):
 # ==== ROUTES ====
 
 # ==== Stripe Checkout Session creation ====
-import stripe
-from fastapi import Request
-
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 class CheckoutRequest(BaseModel):
     ticket_type: str = "single_use"
@@ -160,14 +153,20 @@ async def create_checkout_session(
     Creates a Stripe Checkout Session for the given ticket type.
     Returns a URL for the client to redirect to.
     """
+    prices = {
+        "single_use": 185,
+        "ten_pack": 1425,
+        "monthly_pass": 3125
+    }
     try:
+        stripe.api_key = os.getenv("STRIPE_PRIVATE_API_KEY")
         session = stripe.checkout.Session.create(
             payment_method_types=["card"],
             line_items=[{
                 "price_data": {
                     "currency": "usd",
                     "product_data": {"name": f"Ticket: {data.ticket_type}"},
-                    "unit_amount": 500,  # placeholder amount in cents
+                    "unit_amount": prices[data.ticket_type],  # placeholder amount in cents
                 },
                 "quantity": 1,
             }],
@@ -199,6 +198,7 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     if event.type == "checkout.session.completed":
+        print(f"\n \n *** *** *** *** CHECKOUT SESSION COMPLETED *** *** *** \n \n")
         session = event.data.object
         user_id = session.metadata.get("user_id")
         ticket_type = session.metadata.get("ticket_type")
@@ -221,8 +221,15 @@ async def stripe_webhook(request: Request):
 # ==== Wallet retrieval endpoint ====
 class TicketModel(BaseModel):
     ticket_id: str
-    payload: str
+    user_id: str
     ticket_type: str
+    valid_for: str
+    issued_at: str
+    issuer: str
+    status: bool
+    signature: str
+    ticket: str
+    qr: str
 
 @app.get("/wallet", summary="List user tickets", response_model=list[TicketModel])
 async def get_wallet(current_user = Depends(read_users_me)):
@@ -232,7 +239,18 @@ async def get_wallet(current_user = Depends(read_users_me)):
     try:
         records = await ticket_validator.list_tickets_for_user(current_user.id)
         result = [
-            TicketModel(ticket_id=str(r.id), payload=r.payload, ticket_type=r.ticket_type)
+            TicketModel(
+                ticket_id=str(r.ticket_id),
+                user_id=str(r.user_id),
+                ticket_type=r.ticket_type,
+                valid_for=r.valid_for,
+                issued_at=r.issued_at,
+                issuer=r.issued_at,
+                status=r.status,
+                signature=r.signature,
+                ticket=r.ticket,
+                qr=r.qr
+            )
             for r in records
         ]
         logger.debug("Retrieved %d tickets for user %s", len(result), current_user.username)

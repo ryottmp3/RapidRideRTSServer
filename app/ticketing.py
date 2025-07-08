@@ -89,11 +89,12 @@ class TicketGenerator:
             "ticket_type": ticket_type,
             "valid_for": str(valid_for),
             "issued_at": now.isoformat(),
-            "issuer": self.issuer
+            "issuer": self.issuer,
+            "status": True
         }
         signature = self.sign_ticket(ticket)
-        await self.save_ticket(ticket, signature)
         QRP = self.create_QR_payload(ticket, signature)
+        await self.save_ticket(ticket, signature, QRP)
         return QRP
 
     def serialize_ticket(
@@ -140,7 +141,8 @@ class TicketGenerator:
     async def save_ticket(
         self,
         ticket: dict,
-        signature: str
+        signature: str,
+        qr: bytes
     ):
         """Calls the Database API to save a ticket to a uid"""
         db_ticket = Ticket(
@@ -150,7 +152,9 @@ class TicketGenerator:
             valid_for=ticket.get("valid_for"),
             issued_at=ticket["issued_at"],
             issuer=ticket["issuer"],
-            signature=signature
+            signature=signature,
+            ticket=json.dumps(ticket),
+            qr=qr
         )
         print("Saving Ticket... ")
         async with Session() as session:
@@ -233,6 +237,16 @@ class TicketValidator:
             result = await session.execute(stmt)
             ticket = result.scalars().first()
             return ticket
+
+    async def list_tickets_for_user(
+        self,
+        uid: str
+    ):
+        async with Session() as session:
+            stmt = select(Ticket).filter_by(user_id=uid)
+            result = await session.execute(stmt)
+            tickets = result.scalars().all()
+            return tickets
 
     async def validate(
         self,

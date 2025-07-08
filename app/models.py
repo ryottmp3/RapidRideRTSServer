@@ -38,6 +38,8 @@ class Ticket(Base):
     issuer = Column(String)
     signature = Column(String)
     status = Column(Boolean, default=True)
+    ticket = Column(String)
+    qr = Column(String)
 
     # Link back to the owning user
     user = relationship("User", back_populates="tickets")
