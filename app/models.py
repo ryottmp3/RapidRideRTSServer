@@ -1,6 +1,8 @@
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Text, func
 from sqlalchemy.orm import relationship
 from database import Base
+from datetime import datetime
+
 
 class User(Base):
     __tablename__ = "users"
@@ -14,6 +16,8 @@ class User(Base):
 
     # One-to-many relationship: a user can have multiple tickets
     tickets = relationship("Ticket", back_populates="user")
+    refresh_tokens = relationship("RefreshToken", back_populates="user")
+
 
 class Product(Base):
     __tablename__ = "products"
@@ -26,6 +30,7 @@ class Product(Base):
     active = Column(Boolean, default=True)
 
     # No tickets relationship since Ticket does not reference product_id
+
 
 class Ticket(Base):
     __tablename__ = "tickets"
@@ -45,3 +50,12 @@ class Ticket(Base):
     user = relationship("User", back_populates="tickets")
     # Removed product relationship since no product_id column
 
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String, unique=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    user = relationship("User", back_populates="refresh_tokens")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    revoked = Column(Boolean, default=False)

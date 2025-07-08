@@ -35,6 +35,7 @@ from dotenv import load_dotenv
 
 from database import get_db
 from models import User
+from models import RefreshToken as DBRefreshToken
 
 # Load environment variables from .env file
 load_dotenv()
@@ -116,15 +117,19 @@ async def authenticate_user(db: AsyncSession, username: str, password: str) -> O
     logger.debug("Authentication succeeded for user: %s", username)
     return user
 
-
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    logger.debug("Creating access token for data: %s", data)
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))  # 15 min
     to_encode.update({"exp": expire})
-    token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    logger.debug("Generated JWT token: %s...", token[:20])
-    return token
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def create_refresh_token(data: dict) -> str:
+    expire = datetime.utcnow() + timedelta(days=90)
+    to_encode = data.copy()
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
 
 # === API Endpoints with Debug Tracing ===
 
@@ -151,6 +156,7 @@ async def register(user: UserCreate, db: AsyncSession = Depends(get_db)):
     logger.debug("Registration successful, issuing token for user: %s", new_user.username)
     return {"access_token": access_token, "token_type": "bearer"}
 
+
 @router.post("/token", response_model=Token)
 async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -166,8 +172,19 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     access_token = create_access_token({"sub": user.username})
+    refresh_token = create_refresh_token({"sub": user.username})
+
+    # Save Refresh Token in DB
+    db_token = DBRefreshToken(token=refresh_token, user_id=user.id)
+    db.add(db_token)
+    await db.commit()
     logger.debug("Login successful, issuing token for user: %s", user.username)
-    return {"access_token": access_token, "token_type": "bearer"}
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
 
 @router.get("/users/me", response_model=UserInDB)
 async def read_users_me(
@@ -199,4 +216,31 @@ async def read_users_me(
 
     logger.debug("Users/me returning data for user: %s", user.username)
     return UserInDB(id=user.id, username=user.username, email=user.email)
+
+
+@router.post("/refresh", response_model=Token)
+async def refresh_access_token(
+    token: str = Depends(oauth2_scheme),  # Send refresh token in Authorization: Bearer ...
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    # Check token exists and not revoked
+    result = await db.execute(select(DBRefreshToken).filter_by(token=token))
+    db_token = result.scalar_one_or_none()
+    if db_token is None or db_token.revoked:
+        raise HTTPException(status_code=401, detail="Refresh token revoked or not found")
+
+    user = await get_user_by_username(db, username)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    access_token = create_access_token({"sub": username})
+    return {"access_token": access_token, "refresh_token": token, "token_type": "bearer"}
 
