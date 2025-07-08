@@ -259,6 +259,15 @@ async def get_wallet(current_user = Depends(read_users_me)):
         logger.error("Error retrieving wallet: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
+async def generate_ten_tickets(uid, valid_for):
+    for _ in range(10):
+        payload = await ticket_generator.generate_ticket(
+            uid=uid,
+            ticket_type="single_use",
+            valid_for=valid_for
+        )
+        yield {"payload": payload}
+
 
 @app.post("/generate", summary="Generate signed ticket", response_model=dict)
 async def generate_ticket(
@@ -283,6 +292,10 @@ async def generate_ticket(
         }
     """
     try:
+        if data.ticket_type == "ten_pack":
+            tix = [t async for t in generate_ten_tickets(current_user.id, data.valid_for)]
+            logger.debug(f"Generated 10 tickets for {current_user.username}")
+            return {"tickets": tix}
         payload = await ticket_generator.generate_ticket(
             uid=current_user.id,
             ticket_type=data.ticket_type,
