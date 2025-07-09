@@ -6,6 +6,7 @@ import sys
 import uuid
 import os
 import hashlib
+import logging
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
