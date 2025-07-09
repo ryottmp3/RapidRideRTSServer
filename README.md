@@ -1,180 +1,116 @@
-# 🚍 RapidRide Mobile Ticketing App
+# RapidRide Ticketing Server
 
-A lightweight, cost-effective mobile and web-based app for the **Rapid City RTS RapidRide** transit system.
-This app enables users to:
-
-- View fixed bus schedules (no real-time tracking)
-- Purchase and store digital bus tickets
-- Display QR codes to be scanned for boarding
-- Receive admin-posted alerts for delays and cancellations
+This is the backend API server for the RapidRide transit fare system, designed to provide secure, low-cost digital ticketing infrastructure using cryptographically signed QR codes and Stripe-based payments.
 
 ---
 
-## Requirements
+## 🚍 Overview
 
-<bold>Arch Linux Packages<\bold>
- - pyside6
- - pyside6-tools
- - python-segno (AUR)
- - python-qrcode-artistic (AUR)
-   - yay -S python-segno python-qrcode-artistic --mflags --nocheck 
- - python-dotenv
- - sqlite
- - python-sqlalchemy
- - postgresql
-   - sudo su -l postgres -c "initdb --locale=C.UTF-8 --encoding=UTF8 -D '/var/lib/postgres/data'"
-   - sudo systemctl enable --now postgresql
-   - sudo -u postgres psql
-     - CREATE ROLE rts WITH LOGIN PASSWORD 'rapidride';
-     - CREATE DATABASE rapidride_db OWNER rts;
-     - ALTER ROLE rts CREATEDB;
-     - \q
+RapidRide enables riders to purchase, store, and validate fare tickets through a secure FastAPI-based backend and a mobile-friendly frontend client. All tickets are digitally signed using Ed25519 to prevent forgery and duplication.
 
 ---
 
-## 🛠 Tech Stack
+## 🛠️ Technology Stack
 
-| Component         | Stack                        |
-|------------------|------------------------------|
-| Frontend (Mobile)| Python (Kivy) or C++ (Qt)     |
-| Backend API      | Python (FastAPI)              |
-| Database         | Supabase (PostgreSQL)         |
-| Ticket Validator | C++ with OpenCV + ZBar        |
-| Admin Dashboard  | Flask or FastAPI + HTML       |
-| Payments         | Stripe API                    |
+- **FastAPI** — high-performance Python web framework
+- **ED25519** — cryptographic signing for tickets
+- **PostgreSQL** or **SQLite** — ticket and user data
+- **SQLAlchemy (async)** — database ORM
+- **Stripe** — payment processing
+- **Docker** (optional) — containerized deployment
 
 ---
 
-## 💸 Ticket Types & Pricing
+## 🚧 Completed Milestones ✅
 
-| Ticket Type       | Cash Price   | Card Price  | Details                             |
-|-------------------|--------------|-------------|-------------------------------------|
-| Single Ride       | $1.50        | $1.85       | Purchase on bus only                |
-| 10-Ride Pass      | $13.50       | $14.25      | 10 single rides; track remaining    |
-| Monthly Pass      | $30.00       | $31.25      | Unlimited rides for 30 days         |
-
-
----
-
-## 📋 Project Roadmap
-
-A checklist-style development roadmap broken into **four core phases**.
-The initial version does not include real-time GPS, maps, or live bus tracking.
+- [x] Ticket generation using ED25519 signatures
+- [x] QR payload structure + base64 encoding
+- [x] FastAPI backend with async validation
+- [x] Stripe integration for payments
+- [x] Wallet endpoint for ticket retrieval
+- [x] Ticket validation via QR scan (`/validate`)
+- [x] Ticket validation via ticket ID (`/check-ticket`)
+- [x] Auth system with `/register` and `/token` endpoints
+- [x] `.env`-based key and Stripe configuration
+- [x] Secure API routing and session-based user context
 
 ---
 
-## ✅ Phase I: Static Schedule Viewer
+## 🎯 Upcoming Milestones 🔜
 
-🕐 Display posted schedules from GTFS or CSV.
-
-### Tasks:
-- <strike> [ ] Download or convert RapidRide's schedule to GTFS or structured CSV </strike>
-- <strike> [ ] Parse `routes.txt`, `stops.txt`, `stop_times.txt`, `trips.txt` </strike>
-  - Routes are viewed via PDF file, map-based routes/schedules will be implemented later on.
-- [x] Build mobile app UI to:
-  - [x] Browse by route
-  - [x] Show stop times for each route/day
-- [ ] Include section for admin-posted alerts
+- [ ] Admin dashboard (route usage, ticket stats, user mgmt)
+- [ ] Stripe webhook logging + fraud detection
+- [ ] Ticket expiration window and time-based validation
+- [ ] Ticket type customization (multi-ride, day pass, etc.)
+- [ ] JWT refresh + session invalidation
+- [ ] Rate limiting and abuse protection
+- [ ] Full Docker deployment with HTTPS reverse proxy
+- [ ] OpenAPI documentation cleanup and security tags
 
 ---
 
-## 🎟 Phase II: Ticket Purchase & QR Code Generator
+## 📦 Installation
 
-🛒 Generate QR tickets via backend API after Stripe payment.
+1. Clone the repository:
 
-### Tasks:
-- [ ] Build `/buy_ticket` FastAPI endpoint
-- [x] Support all ticket types (single, 10-ride, monthly)
-- [x] Generate QR code using UUID + expiration metadata
-- [ ] Store ticket in Supabase with status tracking
-- [ ] Display ticket in mobile app (including expiration countdown)
+```bash
+git clone https://github.com/yourname/rapidride-server.git
+cd rapidride-server
+```
 
----
+2. Create a virtual environment:
 
-## 🛠 Phase III: Admin Dashboard & Ticket Validator
+```bash
+python -m venv venv
+source venv/bin/activate
+```
 
-🧰 Allow drivers or staff to scan QR tickets and post alerts.
+3. Install dependencies:
 
-### Ticket Validator (C++):
-- [ ] Scan QR using OpenCV + ZBar
-- [ ] Send UUID to backend `/validate_ticket` endpoint
-- [ ] Backend checks:
-  - [ ] Valid?
-  - [ ] Expired?
-  - [ ] Already used?
+```bash
+pip install -r requirements.txt
+```
 
-### Admin Dashboard:
-- [ ] Web UI (Flask/FastAPI + simple HTML)
-- [ ] Admin login
-- [ ] Post service alerts by route or date
-- [ ] View ticket usage logs
+4. Add a `.env` file:
 
----
+```dotenv
+ED25519_PRIVATE_KEY_B64=...
+ED25519_PUBLIC_KEY_B64=...
+STRIPE_PRIVATE_API_KEY=...
+STRIPE_WEBHOOK_SECRET=...
+FRONTEND_URL=http://localhost:3000
+```
 
-## 📍 Phase IV: Nearby Stops via GPS (Future Feature)
+5. Run the server:
 
-🗺️ Use phone location to show nearest stops and upcoming scheduled buses (no real-time tracking).
-
-### Tasks:
-- [ ] Use phone GPS (via `plyer` or `geopy`)
-- [ ] Parse `stops.txt` for coordinates
-- [ ] Calculate nearest stops using Haversine distance
-- [ ] Show upcoming departures using `stop_times.txt` data
+```bash
+uvicorn server.main:app --reload
+```
 
 ---
 
-## 🧱 Optional Features
+## 📁 API Endpoints
 
-- [ ] Prepaid ticket codes (offline payment compatibility)
-- [ ] Ticket gifting (send a ride to someone else)
-- [ ] Kiosk mode (install app on public devices)
+- `POST /register` – user registration
+- `POST /token` – JWT token auth
+- `POST /generate` – generate signed ticket
+- `POST /validate` – validate QR payload
+- `POST /check-ticket` – validate by ticket_id
+- `GET /wallet` – list all user tickets
+- `POST /create-checkout-session` – Stripe Checkout link
 
----
-
-## 🔐 Security Notes
-
-- Tickets use UUID stored in backend
-- QR codes expire or decrement ride count on scan
-- Prevent re-use by marking as scanned
-- (Optional) Add encryption (e.g., JWT) in later versions
+See `/docs` or `/redoc` for full auto-generated API docs.
 
 ---
 
-## 💰 Cost Estimate
+## 📜 License
 
-| Resource          | Cost Estimate       |
-|-------------------|---------------------|
-| Hosting (Render/Railway) | $0–$7/month    |
-| Supabase (DB/Auth) | Free tier covers MVP |
-| Stripe Fees        | 2.9% + $0.30/txn    |
-| Domain Name        | ~$12/year (optional) |
-| Ticket Validator   | Open-source; no cost |
-| Dev Tools          | Free (Python/C++)   |
+This project is licensed under the **GNU General Public License v3 (GPL-3.0)**. You are free to use, study, and modify the code, but redistribution must remain open-source under the same license.
 
 ---
 
-## 🧭 Deployment Checklist
+## 👤 Author
 
-**Minimum Viable Product (MVP):**
-- [ ] Routes & schedules display correctly
-- [ ] Stripe payment and ticket generation work
-- [ ] Admin dashboard can post alerts
-- [ ] QR scanner works and verifies ticket status
+Built by a solo developer as a civic infrastructure project for cities like Rapid City, SD.  
+Contact: harley.glayzer@mines.sdsmt.edu
 
-**Phase IV Readiness:**
-- [ ] Phone GPS accessible
-- [ ] Stops are accurately geo-located
-- [ ] List of nearby stops with schedules is functional
-
----
-
-## ✨ License
-
-This project is intended for public service use. All code will be released under the [MIT License](https://opensource.org/licenses/MIT) unless otherwise specified.
-
----
-
-## 📬 Contact
-
-Want to collaborate with the RapidRide transit agency?
-Reach out to their official site: [https://www.rcgov.org/departments/public-works/transit-division-rts.html](https://www.rcgov.org/departments/public-works/transit-division-rts.html)
