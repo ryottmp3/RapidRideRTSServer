@@ -19,6 +19,7 @@ Run:
 """
 
 import os
+import uuid
 import base64
 import logging
 from fastapi import FastAPI, HTTPException, Depends, Request
@@ -29,6 +30,7 @@ from dotenv import load_dotenv
 from auth import router as auth_router
 from auth import read_users_me
 from alerts import router as alerts_router
+from validate import router as validation_router
 
 # Ticket crypto and DB handling
 from ticketing import TicketGenerator, TicketValidator
@@ -70,6 +72,7 @@ app = FastAPI(
 # Mount the auth endpoints
 app.include_router(auth_router)
 app.include_router(alerts_router)
+app.include_router(validation_router)
 #   This registers:
 #       POST /register
 #       POST /token
@@ -338,4 +341,27 @@ async def validate_ticket(data: TicketValidationRequest):
     except Exception as e:
         logger.error(f"Validation Error: {e}")
         raise HTTPException(status_code=400, detail=f"Validation error: {e}")
+class TicketIDValidationRequest(BaseModel):
+    ticket_id: uuid.UUID
 
+@app.post("/check-ticket", summary="Validate ticket by ID", response_model=dict)
+async def check_ticket(data: TicketIDValidationRequest):
+    """
+    Checks if a ticket exists and is valid, and marks it used if single_use.
+
+    Request:
+        {
+            "ticket_id": "<uuid>"
+        }
+
+    Response:
+        {
+            "status": "valid" | "already_used" | "invalid"
+        }
+    """
+    try:
+        result = await ticket_validator.validate_ticket_by_id(data.ticket_id)
+        return result
+    except Exception as e:
+        logger.error(f"Ticket ID validation error: {e}")
+        raise HTTPException(status_code=400, detail="Ticket validation failed")

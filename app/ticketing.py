@@ -324,6 +324,21 @@ class TicketValidator:
             }
         """
 
+    async def validate_ticket_by_id(self, ticket_id: uuid.UUID) -> dict:
+        async with Session() as session:
+            ticket = await session.get(Ticket, str(ticket_id))
+            if not ticket:
+                return {"status": "invalid"}
+
+            if not ticket.status:
+                return {"status": "already_used"}
+
+            if ticket.ticket_type == "single_use":
+                ticket.status = False
+                await session.commit()
+
+            return {"status": "valid"}
+
 
 if __name__ == "__main__":
     # THIS IS DEVELOPMENT/TESTING ONLY
