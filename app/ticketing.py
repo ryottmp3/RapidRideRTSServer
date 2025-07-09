@@ -19,6 +19,8 @@ from database import async_session as Session
 from models import Ticket
 from sqlalchemy import select
 
+logger = logging.getLogger("rts_server.ticketing")
+
 def initialize_signing_key():
     print("Initialization Protocol: Generating Private ED25519 Key... \n")
     private_key = Ed25519PrivateKey.generate()
@@ -333,9 +335,22 @@ class TicketValidator:
             if not ticket.status:
                 return {"status": "already_used"}
 
+            return {"status": "valid"}
+
+    async def invalidate(self, ticket_id: uuid.UUID) -> dict:
+        """Invalidates single use ticket"""
+        async with Session() as session:
+            ticket = await session.get(Ticket, str(ticket_id))
+            if not ticket:
+                return {"status": "invalid"}
+
+            if not ticket.status:
+                return {"status": "already_used"}
+
             if ticket.ticket_type == "single_use":
                 ticket.status = False
                 await session.commit()
+                logger.debug(f"Ticket {ticket_id} marked as used.")
 
             return {"status": "valid"}
 

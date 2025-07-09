@@ -31,13 +31,10 @@ from auth import router as auth_router
 from auth import read_users_me
 from alerts import router as alerts_router
 from validate import router as validation_router
+from use_ticket import router as usage_router
 
 # Ticket crypto and DB handling
 from ticketing import TicketGenerator, TicketValidator
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey
-)
 
 # Initialize logging
 logging.basicConfig(level=logging.DEBUG)
@@ -73,6 +70,7 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(alerts_router)
 app.include_router(validation_router)
+app.include_router(usage_router)
 #   This registers:
 #       POST /register
 #       POST /token
@@ -80,14 +78,17 @@ app.include_router(validation_router)
 
 # ==== API SCHEMAS ====
 
+
 class TicketRequest(BaseModel):
     """Data sent by client to request a ticket"""
     ticket_type: str = "single_use"
     valid_for: str | None = None  # Optional string like "2025-08"
 
+
 class TicketValidationRequest(BaseModel):
     """Data sent by validator (scanner app) to verify a ticket"""
     payload_b64: str
+
 
 # ==== Public Key endpoint for client-side validation ====
 @app.get("/public_key", summary="Get ED25519 Pubkey")
@@ -98,10 +99,12 @@ async def public_key_endpoint():
 
 # ==== NEW: Stripe sandbox integration ====
 
+
 class PaymentRequest(BaseModel):
     """Data for creating a Stripe PaymentIntent"""
     amount: int
     currency: str = "usd"
+
 
 @app.post("/create-payment-intent", summary="Create Stripe PaymentIntent")
 async def create_payment_intent(
@@ -341,6 +344,8 @@ async def validate_ticket(data: TicketValidationRequest):
     except Exception as e:
         logger.error(f"Validation Error: {e}")
         raise HTTPException(status_code=400, detail=f"Validation error: {e}")
+
+
 class TicketIDValidationRequest(BaseModel):
     ticket_id: uuid.UUID
 
@@ -361,6 +366,32 @@ async def check_ticket(data: TicketIDValidationRequest):
     """
     try:
         result = await ticket_validator.validate_ticket_by_id(data.ticket_id)
+        return result
+    except Exception as e:
+        logger.error(f"Ticket ID validation error: {e}")
+        raise HTTPException(status_code=400, detail="Ticket validation failed")
+
+
+class TicketUsageRequest(BaseModel):
+    ticket_id: uuid.UUID
+
+@app.post("/use-ticket", summary="Use by ID", response_model=dict)
+async def use_ticket(data: TicketUsageRequest):
+    """
+    Checks if a ticket exists and is valid, and marks it used if single_use.
+
+    Request:
+        {
+            "ticket_id": "<uuid>"
+        }
+
+    Response:
+        {
+            "status": "valid" | "already_used" | "invalid"
+        }
+    """
+    try:
+        result = await ticket_validator.invalidate(data.ticket_id)
         return result
     except Exception as e:
         logger.error(f"Ticket ID validation error: {e}")
