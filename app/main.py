@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from auth import router as auth_router
 from auth import read_users_me
+from alerts import router as alerts_router
 
 # Ticket crypto and DB handling
 from ticketing import TicketGenerator, TicketValidator
@@ -68,6 +69,7 @@ app = FastAPI(
 
 # Mount the auth endpoints
 app.include_router(auth_router)
+app.include_router(alerts_router)
 #   This registers:
 #       POST /register
 #       POST /token

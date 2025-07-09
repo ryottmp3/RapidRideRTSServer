@@ -66,6 +66,7 @@ class UserCreate(BaseModel):
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
 
 class TokenData(BaseModel):
@@ -75,8 +76,10 @@ class UserInDB(BaseModel):
     id: int
     username: str
     email: Optional[str] = None
+    is_admin: bool
 
 # === Utility Functions with Debug Tracing ===
+
 
 def hash_password(password: str) -> str:
     """Hash a plaintext password using bcrypt and return a UTF-8 string for storage."""
@@ -153,8 +156,13 @@ async def register(user: UserCreate, db: AsyncSession = Depends(get_db)):
     await db.refresh(new_user)
 
     access_token = create_access_token({"sub": new_user.username})
+    refresh_token = create_refresh_token({"sub": new_user.username})
     logger.debug("Registration successful, issuing token for user: %s", new_user.username)
-    return {"access_token": access_token, "token_type": "bearer"}
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
 
 
 @router.post("/token", response_model=Token)
@@ -215,7 +223,12 @@ async def read_users_me(
         raise credentials_exception
 
     logger.debug("Users/me returning data for user: %s", user.username)
-    return UserInDB(id=user.id, username=user.username, email=user.email)
+    return UserInDB(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        is_admin=user.is_admin
+    )
 
 
 @router.post("/refresh", response_model=Token)

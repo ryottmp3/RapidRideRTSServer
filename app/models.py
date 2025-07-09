@@ -13,6 +13,7 @@ class User(Base):
     # Securely store the user's password hash for authentication
     hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    is_admin = Column(Boolean, default=False)
 
     # One-to-many relationship: a user can have multiple tickets
     tickets = relationship("Ticket", back_populates="user")
@@ -59,3 +60,11 @@ class RefreshToken(Base):
     user = relationship("User", back_populates="refresh_tokens")
     created_at = Column(DateTime, default=datetime.utcnow)
     revoked = Column(Boolean, default=False)
+
+
+class Alert(Base):
+    __tablename__ = "alerts"
+    id = Column(Integer, primary_key=True)
+    message = Column(String)
+    issued_at = Column(DateTime, default=datetime.utcnow)
+    issued_by = Column(Integer, ForeignKey("users.id"))
