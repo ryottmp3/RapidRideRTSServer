@@ -257,3 +257,72 @@ async def refresh_access_token(
     access_token = create_access_token({"sub": username})
     return {"access_token": access_token, "refresh_token": token, "token_type": "bearer"}
 
+from fastapi import Body
+from pydantic import EmailStr
+from sqlalchemy.exc import IntegrityError
+
+class UserUpdate(BaseModel):
+    display_name: Optional[str] = None
+    username: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+
+@router.put("/users/me", status_code=200)
+async def update_user_me(
+    data: UserUpdate,
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    logger.debug("Updating user with token: %s...", token[:20])
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = await get_user_by_username(db, username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Apply updates if present
+    if data.username:
+        user.username = data.username
+    if data.email:
+        user.email = data.email
+    if data.display_name:
+        user.display_name = data.display_name
+    if data.password:
+        user.hashed_password = hash_password(data.password)
+
+    try:
+        await db.commit()
+        return {"detail": "Account updated successfully"}
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Username or email already in use")
+
+@router.delete("/users/me", status_code=204)
+async def delete_user_me(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
+    logger.debug("Delete account request with token: %s...", token[:20])
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = await get_user_by_username(db, username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    await db.delete(user)
+    await db.commit()
+    logger.info("Account deleted: %s", username)
+    return
+

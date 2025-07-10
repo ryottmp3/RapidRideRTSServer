@@ -10,6 +10,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(64), unique=True, nullable=False)
     email = Column(String(120), unique=True, nullable=True)
+    display_name = Column(String(64), unique=False, nullable=True)
     # Securely store the user's password hash for authentication
     hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

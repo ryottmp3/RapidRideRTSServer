@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from database import async_session
+from database import get_db
 from models import Ticket  # Adjust if needed
 import uuid
 import logging
@@ -17,24 +17,19 @@ class ValidationRequest(BaseModel):
 @router.post("/validate")
 async def validate_ticket(
     request: ValidationRequest,
-    session: AsyncSession = Depends(async_session)
+    session: AsyncSession = Depends(get_db)
 ):
     ticket_id = request.ticket_id
     logger.debug(f"Validating ticket_id: {ticket_id}")
 
-    ticket = await session.get(Ticket, ticket_id)
+    ticket = await session.get(Ticket, str(ticket_id))
     if not ticket:
         logger.info(f"Ticket not found: {ticket_id}")
         raise HTTPException(status_code=404, detail="Ticket not found")
 
-    if not ticket.valid:
+    if not ticket.status:
         logger.info(f"Ticket already used: {ticket_id}")
         return {"status": "already_used"}
-
-    if ticket.single_use:
-        ticket.valid = False
-        await session.commit()
-        logger.info(f"Ticket {ticket_id} marked as used")
 
     return {"status": "valid"}
 

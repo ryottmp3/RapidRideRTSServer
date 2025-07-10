@@ -25,6 +25,7 @@ import logging
 from fastapi import FastAPI, HTTPException, Depends, Request
 import stripe
 from fastapi.responses import Response
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from auth import router as auth_router
@@ -77,7 +78,13 @@ app.include_router(usage_router)
 #       GET /users/me
 
 # ==== API SCHEMAS ====
-
+# Assuming your app is called `app`
+for route in app.routes:
+    if isinstance(route, APIRoute):
+        print(f"\nRoute: {route.path}")
+        print(f"  Endpoint: {route.endpoint.__name__}")
+        for dep in route.dependant.dependencies:
+            print(f"  Depends on: {dep.call}")
 
 class TicketRequest(BaseModel):
     """Data sent by client to request a ticket"""
